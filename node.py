@@ -2,21 +2,21 @@ import asyncio
 import sys
 from kademlia.network import Server
 
-async def iniciar_no(porta_local):
+async def init_node(port):
     server = Server()
-    await server.listen(porta_local, interface="127.0.0.1")
+    await server.listen(port, interface="127.0.0.1")
     
-    conectado = await server.bootstrap([("127.0.0.1", 8468)])
-    if not conectado:
-        print(f"[Erro] Falha ao conectar ao bootstrap na porta {porta_local}")
+    connection_success = await server.bootstrap([("127.0.0.1", 8468)])
+    if not connection_success:
+        print(f"[Error] Couldn't connect on port {port}")
         server.stop()
         return
 
-    chave = f"status-{porta_local}"
-    await server.set(chave, "online")
+    key = f"status-{port}"
+    await server.set(key, "online")
     
-    valor = await server.get(chave)
-    print(f"[Nó {porta_local}] Conectado. Teste DHT: '{chave}' -> '{valor}'")
+    val = await server.get(key)
+    print(f"[Node {port}] Connected. Testing DHT: '{key}' -> '{val}'")
 
     try:
         await asyncio.Event().wait()
@@ -27,11 +27,11 @@ async def iniciar_no(porta_local):
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Uso: python node.py <porta>")
+        print("Usage: python node.py <port>")
         sys.exit(1)
         
-    porta = int(sys.argv[1])
+    port = int(sys.argv[1])
     try:
-        asyncio.run(iniciar_no(porta))
+        asyncio.run(init_node(port))
     except KeyboardInterrupt:
-        print(f"\nNó da porta {porta} encerrado.")
+        print(f"\nNode on {port} disconnected.")
