@@ -108,8 +108,10 @@ async def init_node(port: int):
                 break
 
             filename = filename.strip()
-            if not filename or filename.lower() in {"quit", "exit"}:
+            if filename.lower() in {"quit", "exit"}:
                 break
+            if not filename:
+                continue
 
             path = Path(filename)
             if path.suffix.lower() not in {".txt", ".py"}:
