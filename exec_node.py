@@ -89,55 +89,62 @@ async def init_node(port: int):
         server.stop()
         return
 
-    key = f"status-{port}"
-    await server.set(key, "online")
-
-    val = await server.get(key)
-    print(f"[Node {port}] Connected. Testing DHT: '{key}' -> '{val}'")
     node_id = get_node_address(port)
     processed_tasks: set = set()
 
     listener_task = asyncio.create_task(listen_for_tasks(server, port, processed_tasks, node_id))
-    print(f"[Node {port}] Pronto. Digite o nome de um arquivo .txt ou .py para distribuir pela rede (ou 'quit' para sair).")
+    print(f"[Node {port}] Ready. Use help to see commands.")
 
     try:
         while True:
             try:
-                filename = await asyncio.to_thread(input, f"[Node {port}] Arquivo> ")
+                usr_input = await asyncio.to_thread(input, f"[Node {port}] Arquivo> ")
+                usr_input = usr_input.strip().split()
+                command = usr_input[0]
+                args = usr_input[1:]
             except EOFError:
                 break
 
-            filename = filename.strip()
-            if not filename or filename.lower() in {"quit", "exit"}:
-                break
+            if command == "help":
+                print(f"[Node {port}]: help: list of commands.")
+                print(f"[Node {port}]: quit: stop.")
+                print(f"[Node {port}]: run <script>: runs the python script on every machine on every node.")
+                print(f"[Node {port}]: show <entry>: shows the content of a entry on the DHT, entry can be a regex.")
+                print(f"[Node {port}]: dump <entry> <target>: dumps the content of the entry into a target binary file.")
+            elif command == "run":
+                if len(args != 1):
+                    print(f"[Node {port}]: [FAILLED] Try \"run <script>\"")
+                    break    
+                filename = args[0]
+                if not filename:
+                    break
+                path = Path(filename)
+                if path.suffix.lower() != ".py":
+                    print(f"[Node {port}] Invalid file. Only python files are accepted.")
+                    continue
 
-            path = Path(filename)
-            if path.suffix.lower() not in {".txt", ".py"}:
-                print(f"[Node {port}] Arquivo inválido. Use um .txt ou .py.")
-                continue
+                try:
+                    script = path.read_text(encoding="utf-8")
+                except FileNotFoundError:
+                    print(f"[Node {port}] Arquivo não encontrado: {filename}")
+                    continue
+                except OSError as exc:
+                    print(f"[Node {port}] Não foi possível ler o arquivo: {exc}")
+                    continue
 
-            try:
-                script = path.read_text(encoding="utf-8")
-            except FileNotFoundError:
-                print(f"[Node {port}] Arquivo não encontrado: {filename}")
-                continue
-            except OSError as exc:
-                print(f"[Node {port}] Não foi possível ler o arquivo: {exc}")
-                continue
+                task_id = str(uuid.uuid4())
+                processed_tasks.add(task_id)
+                task_payload = {"id": task_id, "filename": filename, "code": script}
 
-            task_id = str(uuid.uuid4())
-            processed_tasks.add(task_id)
-            task_payload = {"id": task_id, "filename": filename, "code": script}
-
-            try:
-                await server.set("lotsonet:current-task", json.dumps(task_payload))
-                await asyncio.sleep(1.5)
-                result = await exec_code(script)
-                response_value = result if isinstance(result, (int, float, bool, str, bytes)) else str(result)
-                await server.set(f"{node_id}-response", response_value)
-                print(f"[Node {port}] Comando distribuído para a rede. Resultado local: {result!r}")
-            except Exception as exc:
-                print(f"[Node {port}] Erro ao executar o comando: {exc}")
+                try:
+                    await server.set("lotsonet:current-task", json.dumps(task_payload))
+                    await asyncio.sleep(1.5)
+                    result = await exec_code(script)
+                    response_value = result if isinstance(result, (int, float, bool, str, bytes)) else str(result)
+                    await server.set(f"{node_id}-response", response_value)
+                    print(f"[Node {port}] Comando distribuído para a rede. Resultado local: {result!r}")
+                except Exception as exc:
+                    print(f"[Node {port}] Erro ao executar o comando: {exc}")
     except asyncio.CancelledError:
         pass
     finally:
