@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import socket
 import sys
 import uuid
@@ -7,6 +8,10 @@ from contextlib import suppress
 from pathlib import Path
 
 from kademlia.network import Server
+
+LISTEN_INTERFACE = os.environ.get("LOTSONET_INTERFACE", "0.0.0.0")
+BOOTSTRAP_HOST = os.environ.get("BOOTSTRAP_HOST", "127.0.0.1")
+BOOTSTRAP_PORT = int(os.environ.get("BOOTSTRAP_PORT", 8468))
 
 
 async def exec_code(script: str):
@@ -76,9 +81,9 @@ async def listen_for_tasks(server: Server, port: int, processed_tasks: set, node
 
 async def init_node(port: int):
     server = Server()
-    await server.listen(port, interface="127.0.0.1")
+    await server.listen(port, interface=LISTEN_INTERFACE)
 
-    connection_success = await server.bootstrap([("127.0.0.1", 8468)])
+    connection_success = await server.bootstrap([(BOOTSTRAP_HOST, BOOTSTRAP_PORT)])
     if not connection_success:
         print(f"[Error] Couldn't connect on port {port}")
         server.stop()
@@ -143,11 +148,10 @@ async def init_node(port: int):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage: python exec_node.py <port>")
-        sys.exit(1)
-
-    port = int(sys.argv[1])
+    if len(sys.argv) >= 2:
+        port = int(sys.argv[1])
+    else:
+        port = int(os.environ.get("LOTSONET_PORT", 8469))
     try:
         asyncio.run(init_node(port))
     except KeyboardInterrupt:

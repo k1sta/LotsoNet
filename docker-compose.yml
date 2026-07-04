@@ -1,0 +1,26 @@
+services:
+  bootstrap:
+    build: .
+    command: python bootstrap.py
+    environment:
+      - LOTSONET_PORT=8468
+    networks:
+      - lotsonet
+
+  node:
+    build: .
+    command: python exec_node.py
+    environment:
+      - LOTSONET_PORT=8469
+      - BOOTSTRAP_HOST=bootstrap
+      - BOOTSTRAP_PORT=8468
+    depends_on:
+      - bootstrap
+    networks:
+      - lotsonet
+    stdin_open: true
+    tty: true
+
+networks:
+  lotsonet:
+    driver: bridge
