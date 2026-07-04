@@ -1,8 +1,6 @@
 import asyncio
 import json
 import os
-import socket
-import psutil
 import sys
 import uuid
 from contextlib import suppress
@@ -10,8 +8,11 @@ from pathlib import Path
 
 from kademlia.network import Server
 
+import discovery
+from netutil import get_local_ip
+
 LISTEN_INTERFACE = os.environ.get("LOTSONET_INTERFACE", "0.0.0.0")
-BOOTSTRAP_HOST = os.environ.get("BOOTSTRAP_HOST", "127.0.0.1")
+BOOTSTRAP_HOST = os.environ.get("BOOTSTRAP_HOST")
 BOOTSTRAP_PORT = int(os.environ.get("BOOTSTRAP_PORT", 8468))
 
 # host  
@@ -36,16 +37,8 @@ def serialize_value(value):
         return str(value)
 
 
-def get_interface_ip(interface_name):
-    addresses = psutil.net_if_addrs()
-    if interface_name in addresses:
-        for addr in addresses[interface_name]:
-            if addr.family == socket.AF_INET:
-                return addr.address
-    return None
-
 def get_node_address(port: int) -> str:
-    host = get_interface_ip("eth0")
+    host = get_local_ip(os.environ.get("LOTSONET_IFACE_NAME"))
     return f"{host}:{port}"
 
 
@@ -89,11 +82,20 @@ async def init_node(port: int):
     server = Server()
     await server.listen(port, interface=LISTEN_INTERFACE)
 
-    connection_success = await server.bootstrap([(BOOTSTRAP_HOST, BOOTSTRAP_PORT)])
-    if not connection_success:
-        print(f"[Error] Couldn't connect on port {port}")
-        server.stop()
-        return
+    discovery_transport, peers = await discovery.discover_peers(port)
+
+    if BOOTSTRAP_HOST:
+        peers.append((BOOTSTRAP_HOST, BOOTSTRAP_PORT))
+    peers = list(dict.fromkeys(peers))
+
+    if peers:
+        connection_success = await server.bootstrap(peers)
+        if not connection_success:
+            print(f"[Node {port}] Warning: found {len(peers)} peer(s) but couldn't bootstrap against any; continuing standalone.")
+        else:
+            print(f"[Node {port}] Bootstrapped against {len(peers)} peer(s).")
+    else:
+        print(f"[Node {port}] No peers discovered; starting a new LotsoNet network as the first node.")
 
     node_id = get_node_address(port)
     processed_tasks: set = set()
@@ -168,6 +170,7 @@ async def init_node(port: int):
         listener_task.cancel()
         with suppress(asyncio.CancelledError):
             await listener_task
+        discovery_transport.close()
         server.stop()
 
 

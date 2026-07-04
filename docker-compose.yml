@@ -3,7 +3,6 @@ services:
     build: .
     environment:
       - LOTSONET_PORT=8468
-      - BOOSTRAP_HOST=172.19.0.2
     networks:
       - lotsonet
     stdin_open: true
