@@ -8,22 +8,20 @@ LotsoNet é um projeto de faculdade para a disciplina de Sistemas Distribuídos.
 
 ## Como rodar:
 
-Inicie um ambiente virtual:
+### Rodando com docker:
+(Exemplo): Rodando com 10 nós virtuais na rede:
 ```shell
-python -m venv venv
+docker-compose up -d --build --scale node=10 node
 ```
-Instale as dependências:
+Agora você pode acessar uma das máquinas (exemplo: a máquina 1) utilizando:
 ```shell
-pip install -r requirements.txt
+docker attach lotsonet-node-1
 ```
-
-Em um dispositivo/terminal, incie o nó âncora:
+E pode derrubá-las usando:
 ```shell
-python bootstrap.py
-```
-
-Em um dispositivo/terminal distintos inicie um nó:
-```shell
-python node.py 8469
+docker-compose down
 ```
 
+### Rodando em diversos dispositivos:
+
+TODO 
