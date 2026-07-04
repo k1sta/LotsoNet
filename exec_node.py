@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import socket
+import psutil
 import sys
 import uuid
 from contextlib import suppress
@@ -13,6 +14,8 @@ LISTEN_INTERFACE = os.environ.get("LOTSONET_INTERFACE", "0.0.0.0")
 BOOTSTRAP_HOST = os.environ.get("BOOTSTRAP_HOST", "127.0.0.1")
 BOOTSTRAP_PORT = int(os.environ.get("BOOTSTRAP_PORT", 8468))
 
+# host  
+port  = int(os.environ.get("LOTSONET_PORT", 8468))
 
 async def exec_code(script: str):
     namespace = {"__name__": "__main__"}
@@ -33,14 +36,17 @@ def serialize_value(value):
         return str(value)
 
 
+def get_interface_ip(interface_name):
+    addresses = psutil.net_if_addrs()
+    if interface_name in addresses:
+        for addr in addresses[interface_name]:
+            if addr.family == socket.AF_INET:
+                return addr.address
+    return None
+
 def get_node_address(port: int) -> str:
-    try:
-        host = socket.gethostbyname(socket.gethostname())
-        if host.startswith("127."):
-            return f"127.0.0.1:{port}"
-        return f"{host}:{port}"
-    except OSError:
-        return f"127.0.0.1:{port}"
+    host = get_interface_ip("eth0")
+    return f"{host}:{port}"
 
 
 async def listen_for_tasks(server: Server, port: int, processed_tasks: set, node_id: str):
@@ -97,22 +103,29 @@ async def init_node(port: int):
 
     try:
         while True:
+            args = []
+            command = []
             try:
                 usr_input = await asyncio.to_thread(input, f"[Node {port}] Arquivo> ")
                 usr_input = usr_input.strip().split()
-                command = usr_input[0]
-                args = usr_input[1:]
+                if usr_input is None or len(usr_input) == 0:
+                    continue
+                elif len(usr_input) == 1:
+                    command = usr_input[0]
+                else:
+                    command = usr_input[0]
+                    args    = usr_input[1:]
             except EOFError:
                 break
 
-            if command == "help":
+            if   command == "help":
                 print(f"[Node {port}]: help: list of commands.")
                 print(f"[Node {port}]: quit: stop.")
                 print(f"[Node {port}]: run <script>: runs the python script on every machine on every node.")
                 print(f"[Node {port}]: show <entry>: shows the content of a entry on the DHT, entry can be a regex.")
                 print(f"[Node {port}]: dump <entry> <target>: dumps the content of the entry into a target binary file.")
             elif command == "run":
-                if len(args != 1):
+                if len(args) != 1:
                     print(f"[Node {port}]: [FAILLED] Try \"run <script>\"")
                     break    
                 filename = args[0]
@@ -145,6 +158,10 @@ async def init_node(port: int):
                     print(f"[Node {port}] Comando distribuído para a rede. Resultado local: {result!r}")
                 except Exception as exc:
                     print(f"[Node {port}] Erro ao executar o comando: {exc}")
+                # continue
+            else:
+                print(f"[Node {port}]: [FAILLED] Try \"help\"")
+                continue
     except asyncio.CancelledError:
         pass
     finally:
@@ -155,10 +172,6 @@ async def init_node(port: int):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) >= 2:
-        port = int(sys.argv[1])
-    else:
-        port = int(os.environ.get("LOTSONET_PORT", 8469))
     try:
         asyncio.run(init_node(port))
     except KeyboardInterrupt:
