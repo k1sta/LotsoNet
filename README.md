@@ -1,6 +1,7 @@
 # LotsoNet
 
-![lotsonet-logo](img/LotsoNet_logo.png)
+<!-- ![lotsonet-logo](img/LotsoNet_logo.png | width=40) -->
+<img src="img/LotsoNet_logo.png"  width="33%" />
 
 ## Resumo:
 
