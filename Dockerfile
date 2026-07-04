@@ -9,4 +9,4 @@ COPY . .
 
 ENV LOTSONET_INTERFACE=0.0.0.0
 
-CMD ["python", "bootstrap.py"]
+CMD ["python", "node.py"]
