@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import re
 import sys
 import uuid
 from contextlib import suppress
@@ -35,6 +36,105 @@ def serialize_value(value):
         return json.dumps(value)
     except (TypeError, ValueError):
         return str(value)
+
+
+def format_dht_value(value):
+    if isinstance(value, bytes):
+        try:
+            return value.decode("utf-8")
+        except UnicodeDecodeError:
+            return repr(value)
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return value
+        return json.dumps(parsed, indent=2, ensure_ascii=False)
+    try:
+        return json.dumps(value, indent=2, ensure_ascii=False)
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def value_to_bytes(value):
+    if isinstance(value, bytes):
+        return value
+    if isinstance(value, bytearray):
+        return bytes(value)
+    if isinstance(value, str):
+        return value.encode("utf-8")
+    try:
+        return json.dumps(value, ensure_ascii=False).encode("utf-8")
+    except (TypeError, ValueError):
+        return str(value).encode("utf-8")
+
+
+def _storage_items(server):
+    storage = getattr(server, "storage", None)
+    if storage is None:
+        protocol = getattr(server, "protocol", None)
+        storage = getattr(protocol, "storage", None)
+    if storage is None:
+        return []
+
+    if hasattr(storage, "items"):
+        return list(storage.items())
+
+    data = getattr(storage, "data", None)
+    if isinstance(data, dict):
+        items = []
+        for key, stored in data.items():
+            if isinstance(stored, tuple) and len(stored) == 2:
+                items.append((key, stored[1]))
+            else:
+                items.append((key, stored))
+        return items
+
+    items = []
+    try:
+        keys = list(storage)
+    except TypeError:
+        return []
+    for key in keys:
+        try:
+            items.append((key, storage[key]))
+        except (KeyError, TypeError):
+            continue
+    return items
+
+
+def _display_key(key):
+    return key.hex() if isinstance(key, bytes) else str(key)
+
+
+def local_storage_matches(server, pattern):
+    regex = re.compile(pattern)
+    matches = []
+    for key, value in _storage_items(server):
+        display_key = _display_key(key)
+        if regex.search(display_key):
+            matches.append((display_key, value))
+    return matches
+
+
+async def get_dht_entries(server, entry):
+    value = await server.get(entry)
+    if value is not None:
+        return [(entry, value)], True
+    return local_storage_matches(server, entry), False
+
+
+async def show_dht_entry(server, entry):
+    return await get_dht_entries(server, entry)
+
+
+async def dump_dht_entry(server, entry, target):
+    value = await server.get(entry)
+    if value is None:
+        return None
+    data = value_to_bytes(value)
+    Path(target).write_bytes(data)
+    return len(data)
 
 
 def get_node_address(port: int) -> str:
@@ -126,6 +226,8 @@ async def init_node(port: int):
                 print(f"[Node {port}]: run <script>: runs the python script on every machine on every node.")
                 print(f"[Node {port}]: show <entry>: shows the content of a entry on the DHT, entry can be a regex.")
                 print(f"[Node {port}]: dump <entry> <target>: dumps the content of the entry into a target binary file.")
+            elif command == "quit":
+                break
             elif command == "run":
                 if len(args) != 1:
                     print(f"[Node {port}]: [FAILLED] Try \"run <script>\"")
@@ -161,6 +263,42 @@ async def init_node(port: int):
                 except Exception as exc:
                     print(f"[Node {port}] Erro ao executar o comando: {exc}")
                 # continue
+            elif command == "show":
+                if len(args) != 1:
+                    print(f"[Node {port}]: [FAILLED] Try \"show <entry>\"")
+                    continue
+                try:
+                    entries, exact = await show_dht_entry(server, args[0])
+                except re.error as exc:
+                    print(f"[Node {port}] Invalid regex: {exc}")
+                    continue
+                except Exception as exc:
+                    print(f"[Node {port}] Could not read DHT entry: {exc}")
+                    continue
+                if not entries:
+                    print(f"[Node {port}] No DHT entry found for {args[0]!r}.")
+                    continue
+                if not exact:
+                    print(f"[Node {port}] Exact key not found; showing local regex matches.")
+                for key, value in entries:
+                    print(f"[Node {port}] {key}:")
+                    print(format_dht_value(value))
+            elif command == "dump":
+                if len(args) != 2:
+                    print(f"[Node {port}]: [FAILLED] Try \"dump <entry> <target>\"")
+                    continue
+                try:
+                    byte_count = await dump_dht_entry(server, args[0], args[1])
+                except OSError as exc:
+                    print(f"[Node {port}] Could not write dump target: {exc}")
+                    continue
+                except Exception as exc:
+                    print(f"[Node {port}] Could not dump DHT entry: {exc}")
+                    continue
+                if byte_count is None:
+                    print(f"[Node {port}] No DHT entry found for {args[0]!r}.")
+                    continue
+                print(f"[Node {port}] Dumped {byte_count} bytes to {args[1]}.")
             else:
                 print(f"[Node {port}]: [FAILLED] Try \"help\"")
                 continue
