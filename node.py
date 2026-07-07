@@ -1,41 +1,27 @@
 import asyncio
 import json
 import os
+import random
 import re
 import sys
 import uuid
 from contextlib import suppress
 from pathlib import Path
 
+from kademlia.crawling import NodeSpiderCrawl
 from kademlia.network import Server
+from kademlia.node import Node as KademliaNode
 
 import discovery
-from netutil import get_local_ip
+from exec_node import exec_code, serialize_value
 
 LISTEN_INTERFACE = os.environ.get("LOTSONET_INTERFACE", "0.0.0.0")
 BOOTSTRAP_HOST = os.environ.get("BOOTSTRAP_HOST")
 BOOTSTRAP_PORT = int(os.environ.get("BOOTSTRAP_PORT", 8468))
+NODE_ID_FILE = os.environ.get("LOTSONET_ID_FILE", ".lotsonet_id")
 
-# host  
+# host
 port  = int(os.environ.get("LOTSONET_PORT", 8468))
-
-async def exec_code(script: str):
-    namespace = {"__name__": "__main__"}
-    exec(compile(script, "<lotsonet_script>", "exec"), namespace, namespace)
-
-    main_fn = namespace.get("main")
-    if callable(main_fn):
-        return main_fn()
-    return None
-
-
-def serialize_value(value):
-    if isinstance(value, (int, float, bool, str, bytes)):
-        return value
-    try:
-        return json.dumps(value)
-    except (TypeError, ValueError):
-        return str(value)
 
 
 def format_dht_value(value):
@@ -137,9 +123,34 @@ async def dump_dht_entry(server, entry, target):
     return len(data)
 
 
-def get_node_address(port: int) -> str:
-    host = get_local_ip(os.environ.get("LOTSONET_IFACE_NAME"))
-    return f"{host}:{port}"
+def load_or_create_node_id(path: Path) -> bytes:
+    if path.exists():
+        return bytes.fromhex(path.read_text().strip())
+    node_id = os.urandom(20)
+    path.write_text(node_id.hex())
+    return node_id
+
+
+def known_node_ids(server: Server) -> set:
+    ids = {server.node.id.hex()}
+    for bucket in server.protocol.router.buckets:
+        for node in bucket.get_nodes():
+            ids.add(node.id.hex())
+    return ids
+
+
+async def refresh_membership(server: Server, rounds: int = 4):
+    protocol = server.protocol
+    lookups = []
+    for _ in range(rounds):
+        target = KademliaNode(os.urandom(20))
+        nearest = protocol.router.find_neighbors(target, server.alpha)
+        if not nearest:
+            continue
+        spider = NodeSpiderCrawl(protocol, target, nearest, server.ksize, server.alpha)
+        lookups.append(spider.find())
+    if lookups:
+        await asyncio.gather(*lookups)
 
 
 async def listen_for_tasks(server: Server, port: int, processed_tasks: set, node_id: str):
@@ -166,12 +177,13 @@ async def listen_for_tasks(server: Server, port: int, processed_tasks: set, node
             code = payload.get("code", "")
             print(f"[Node {port}] Recebido comando distribuído: {filename}")
 
+            result_key = f"lotsonet:result:{task_id}:{node_id}"
             try:
                 result = await exec_code(code)
-                await server.set(f"{node_id}-response", serialize_value(result))
-                print(f"[Node {port}] Resultado salvo em {node_id}-response: {result!r}")
+                await server.set(result_key, serialize_value(result))
+                print(f"[Node {port}] Resultado salvo em {result_key}: {result!r}")
             except Exception as exc:
-                await server.set(f"{node_id}-response", serialize_value({"error": str(exc)}))
+                await server.set(result_key, serialize_value({"error": str(exc)}))
                 print(f"[Node {port}] Erro ao executar comando distribuído: {exc}")
         except Exception as exc:
             print(f"[Node {port}] Falha ao ouvir por comandos: {exc}")
@@ -179,7 +191,8 @@ async def listen_for_tasks(server: Server, port: int, processed_tasks: set, node
 
 
 async def init_node(port: int):
-    server = Server()
+    node_id_bytes = load_or_create_node_id(Path(NODE_ID_FILE))
+    server = Server(node_id=node_id_bytes)
     await server.listen(port, interface=LISTEN_INTERFACE)
 
     discovery_transport, peers = await discovery.discover_peers(port)
@@ -197,7 +210,7 @@ async def init_node(port: int):
     else:
         print(f"[Node {port}] No peers discovered; starting a new LotsoNet network as the first node.")
 
-    node_id = get_node_address(port)
+    node_id = node_id_bytes.hex()
     processed_tasks: set = set()
 
     listener_task = asyncio.create_task(listen_for_tasks(server, port, processed_tasks, node_id))
@@ -224,6 +237,7 @@ async def init_node(port: int):
                 print(f"[Node {port}]: help: list of commands.")
                 print(f"[Node {port}]: quit: stop.")
                 print(f"[Node {port}]: run <script>: runs the python script on every machine on every node.")
+                print(f"[Node {port}]: collect <task_id>: gathers every known node's result for a task.")
                 print(f"[Node {port}]: show <entry>: shows the content of a entry on the DHT, entry can be a regex.")
                 print(f"[Node {port}]: dump <entry> <target>: dumps the content of the entry into a target binary file.")
             elif command == "quit":
@@ -231,10 +245,10 @@ async def init_node(port: int):
             elif command == "run":
                 if len(args) != 1:
                     print(f"[Node {port}]: [FAILLED] Try \"run <script>\"")
-                    break    
+                    continue
                 filename = args[0]
                 if not filename:
-                    break
+                    continue
                 path = Path(filename)
                 if path.suffix.lower() != ".py":
                     print(f"[Node {port}] Invalid file. Only python files are accepted.")
@@ -257,12 +271,29 @@ async def init_node(port: int):
                     await server.set("lotsonet:current-task", json.dumps(task_payload))
                     await asyncio.sleep(1.5)
                     result = await exec_code(script)
-                    response_value = result if isinstance(result, (int, float, bool, str, bytes)) else str(result)
-                    await server.set(f"{node_id}-response", response_value)
-                    print(f"[Node {port}] Comando distribuído para a rede. Resultado local: {result!r}")
+                    await server.set(f"lotsonet:result:{task_id}:{node_id}", serialize_value(result))
+                    print(f"[Node {port}] Comando distribuído para a rede ({task_id}). Resultado local: {result!r}")
                 except Exception as exc:
                     print(f"[Node {port}] Erro ao executar o comando: {exc}")
-                # continue
+            elif command == "collect":
+                if len(args) != 1:
+                    print(f"[Node {port}]: [FAILLED] Try \"collect <task_id>\"")
+                    continue
+                task_id = args[0]
+                await refresh_membership(server)
+                member_ids = known_node_ids(server)
+                results = {}
+                for member_id in member_ids:
+                    value = await server.get(f"lotsonet:result:{task_id}:{member_id}")
+                    if value is not None:
+                        results[member_id] = value
+                if not results:
+                    print(f"[Node {port}] No results found for task {task_id!r} among {len(member_ids)} known node(s).")
+                    continue
+                print(f"[Node {port}] Collected {len(results)}/{len(member_ids)} result(s) for task {task_id}:")
+                for member_id, value in results.items():
+                    print(f"  {member_id}: {format_dht_value(value)}")
+                await server.set(f"lotsonet:aggregate:{task_id}", json.dumps(results))
             elif command == "show":
                 if len(args) != 1:
                     print(f"[Node {port}]: [FAILLED] Try \"show <entry>\"")
