@@ -299,7 +299,6 @@ async def init_node(port: int):
                 if len(args) != 0:
                     print(f"[Node {port}]: [FAILLED] Try \"status\"")
                     continue
-                await refresh_membership(server)
                 peer_ids = known_node_ids(server) - {node_id}
                 print(f"[Node {port}] node_id: {node_id}")
                 print(f"[Node {port}] listening on port: {port}")
