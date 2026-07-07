@@ -13,12 +13,13 @@ from kademlia.network import Server
 from kademlia.node import Node as KademliaNode
 
 import discovery
+from envelope import load_or_create_keypair, node_id_bytes_for_key
 from exec_node import exec_code, serialize_value
 
 LISTEN_INTERFACE = os.environ.get("LOTSONET_INTERFACE", "0.0.0.0")
 BOOTSTRAP_HOST = os.environ.get("BOOTSTRAP_HOST")
 BOOTSTRAP_PORT = int(os.environ.get("BOOTSTRAP_PORT", 8468))
-NODE_ID_FILE = os.environ.get("LOTSONET_ID_FILE", ".lotsonet_id")
+NODE_KEY_FILE = os.environ.get("LOTSONET_KEY_FILE", ".lotsonet_key")
 
 # host
 port  = int(os.environ.get("LOTSONET_PORT", 8468))
@@ -123,14 +124,6 @@ async def dump_dht_entry(server, entry, target):
     return len(data)
 
 
-def load_or_create_node_id(path: Path) -> bytes:
-    if path.exists():
-        return bytes.fromhex(path.read_text().strip())
-    node_id = os.urandom(20)
-    path.write_text(node_id.hex())
-    return node_id
-
-
 def known_node_ids(server: Server) -> set:
     ids = {server.node.id.hex()}
     for bucket in server.protocol.router.buckets:
@@ -191,7 +184,8 @@ async def listen_for_tasks(server: Server, port: int, processed_tasks: set, node
 
 
 async def init_node(port: int):
-    node_id_bytes = load_or_create_node_id(Path(NODE_ID_FILE))
+    private_key = load_or_create_keypair(Path(NODE_KEY_FILE))
+    node_id_bytes = node_id_bytes_for_key(private_key)
     server = Server(node_id=node_id_bytes)
     await server.listen(port, interface=LISTEN_INTERFACE)
 
