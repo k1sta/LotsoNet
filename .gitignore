@@ -48,4 +48,9 @@ coverage.xml
 
 # Sphinx documentation
 docs/_build/
-   
+
+# LotsoNet task-issuer private key -- never commit this
+issuer.key
+
+# LotsoNet per-node persistent id
+.lotsonet_id

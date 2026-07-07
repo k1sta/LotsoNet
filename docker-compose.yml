@@ -1,8 +1,27 @@
 services:
-  node:
+  # The one node authorized to issue "run" commands. Holds issuer.key.
+  # Only ever run one instance of this service.
+  issuer:
     build: .
     environment:
       - LOTSONET_PORT=8468
+    volumes:
+      - ./issuer.pub:/app/issuer.pub:ro
+      - ./issuer.key:/app/issuer.key:ro
+    networks:
+      - lotsonet
+    stdin_open: true
+    tty: true
+
+  # Plain worker nodes: execute tasks, report results, but cannot issue
+  # commands (no issuer.key mounted). Scale this one, e.g.:
+  #   docker-compose up --scale worker=5 worker
+  worker:
+    build: .
+    environment:
+      - LOTSONET_PORT=8468
+    volumes:
+      - ./issuer.pub:/app/issuer.pub:ro
     networks:
       - lotsonet
     stdin_open: true

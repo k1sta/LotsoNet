@@ -13,13 +13,15 @@ from kademlia.network import Server
 from kademlia.node import Node as KademliaNode
 
 import discovery
-from envelope import load_or_create_keypair, node_id_bytes_for_key
+from envelope import load_public_key, load_private_key_if_present, make_envelope, open_envelope
 from exec_node import exec_code, serialize_value
 
 LISTEN_INTERFACE = os.environ.get("LOTSONET_INTERFACE", "0.0.0.0")
 BOOTSTRAP_HOST = os.environ.get("BOOTSTRAP_HOST")
 BOOTSTRAP_PORT = int(os.environ.get("BOOTSTRAP_PORT", 8468))
-NODE_KEY_FILE = os.environ.get("LOTSONET_KEY_FILE", ".lotsonet_key")
+NODE_ID_FILE = os.environ.get("LOTSONET_ID_FILE", ".lotsonet_id")
+ISSUER_PUBKEY_FILE = os.environ.get("LOTSONET_ISSUER_PUBKEY_FILE", "issuer.pub")
+ISSUER_KEY_FILE = os.environ.get("LOTSONET_ISSUER_KEY_FILE", "issuer.key")
 
 # host
 port  = int(os.environ.get("LOTSONET_PORT", 8468))
@@ -124,6 +126,14 @@ async def dump_dht_entry(server, entry, target):
     return len(data)
 
 
+def load_or_create_node_id(path: Path) -> bytes:
+    if path.exists():
+        return bytes.fromhex(path.read_text().strip())
+    node_id = os.urandom(20)
+    path.write_text(node_id.hex())
+    return node_id
+
+
 def known_node_ids(server: Server) -> set:
     ids = {server.node.id.hex()}
     for bucket in server.protocol.router.buckets:
@@ -146,17 +156,16 @@ async def refresh_membership(server: Server, rounds: int = 4):
         await asyncio.gather(*lookups)
 
 
-async def listen_for_tasks(server: Server, port: int, processed_tasks: set, node_id: str):
+async def listen_for_tasks(server: Server, port: int, processed_tasks: set, node_id: str, authorized_pubkey: bytes):
     while True:
         try:
-            payload_str = await server.get("lotsonet:current-task")
-            if not payload_str:
+            envelope_str = await server.get("lotsonet:current-task")
+            if not envelope_str:
                 await asyncio.sleep(1)
                 continue
 
-            try:
-                payload = json.loads(payload_str)
-            except (TypeError, json.JSONDecodeError):
+            payload = open_envelope(envelope_str, "task", authorized_pubkey=authorized_pubkey)
+            if payload is None:
                 await asyncio.sleep(1)
                 continue
 
@@ -184,8 +193,17 @@ async def listen_for_tasks(server: Server, port: int, processed_tasks: set, node
 
 
 async def init_node(port: int):
-    private_key = load_or_create_keypair(Path(NODE_KEY_FILE))
-    node_id_bytes = node_id_bytes_for_key(private_key)
+    authorized_pubkey_path = Path(ISSUER_PUBKEY_FILE)
+    if not authorized_pubkey_path.exists():
+        raise SystemExit(
+            f"Missing {ISSUER_PUBKEY_FILE}. Every node needs the network's task-issuer "
+            f"public key to verify commands. Run generate_issuer_keypair.py once and "
+            f"distribute the resulting {ISSUER_PUBKEY_FILE} to every node."
+        )
+    authorized_pubkey = load_public_key(authorized_pubkey_path)
+    issuer_private_key = load_private_key_if_present(Path(ISSUER_KEY_FILE))
+
+    node_id_bytes = load_or_create_node_id(Path(NODE_ID_FILE))
     server = Server(node_id=node_id_bytes)
     await server.listen(port, interface=LISTEN_INTERFACE)
 
@@ -207,8 +225,13 @@ async def init_node(port: int):
     node_id = node_id_bytes.hex()
     processed_tasks: set = set()
 
-    listener_task = asyncio.create_task(listen_for_tasks(server, port, processed_tasks, node_id))
-    print(f"[Node {port}] Ready. Use help to see commands.")
+    listener_task = asyncio.create_task(
+        listen_for_tasks(server, port, processed_tasks, node_id, authorized_pubkey)
+    )
+    if issuer_private_key is None:
+        print(f"[Node {port}] Ready (worker only -- no {ISSUER_KEY_FILE} found, cannot issue tasks). Use help to see commands.")
+    else:
+        print(f"[Node {port}] Ready (authorized task issuer). Use help to see commands.")
 
     try:
         while True:
@@ -238,6 +261,9 @@ async def init_node(port: int):
             elif command == "quit":
                 break
             elif command == "run":
+                if issuer_private_key is None:
+                    print(f"[Node {port}]: [FAILLED] This node is not the network's authorized task issuer ({ISSUER_KEY_FILE} not found). Cannot run tasks.")
+                    continue
                 if len(args) != 1:
                     print(f"[Node {port}]: [FAILLED] Try \"run <script>\"")
                     continue
@@ -261,9 +287,10 @@ async def init_node(port: int):
                 task_id = str(uuid.uuid4())
                 processed_tasks.add(task_id)
                 task_payload = {"id": task_id, "filename": filename, "code": script}
+                envelope_str = make_envelope("task", issuer_private_key, task_payload, context={"task_id": task_id})
 
                 try:
-                    await server.set("lotsonet:current-task", json.dumps(task_payload))
+                    await server.set("lotsonet:current-task", envelope_str)
                     await asyncio.sleep(1.5)
                     result = await exec_code(script)
                     await server.set(f"lotsonet:result:{task_id}:{node_id}", serialize_value(result))
