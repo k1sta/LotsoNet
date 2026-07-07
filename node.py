@@ -238,6 +238,7 @@ async def init_node(port: int):
                 print(f"[Node {port}]: quit: stop.")
                 print(f"[Node {port}]: run <script>: runs the python script on every machine on every node.")
                 print(f"[Node {port}]: collect <task_id>: gathers every known node's result for a task.")
+                print(f"[Node {port}]: status: shows this node's id, port, and known peer count.")
                 print(f"[Node {port}]: show <entry>: shows the content of a entry on the DHT, entry can be a regex.")
                 print(f"[Node {port}]: dump <entry> <target>: dumps the content of the entry into a target binary file.")
             elif command == "quit":
@@ -294,6 +295,16 @@ async def init_node(port: int):
                 for member_id, value in results.items():
                     print(f"  {member_id}: {format_dht_value(value)}")
                 await server.set(f"lotsonet:aggregate:{task_id}", json.dumps(results))
+            elif command == "status":
+                if len(args) != 0:
+                    print(f"[Node {port}]: [FAILLED] Try \"status\"")
+                    continue
+                await refresh_membership(server)
+                peer_ids = known_node_ids(server) - {node_id}
+                print(f"[Node {port}] node_id: {node_id}")
+                print(f"[Node {port}] listening on port: {port}")
+                print(f"[Node {port}] known peers: {len(peer_ids)}")
+                print(f"[Node {port}] ksize: {server.ksize}, alpha: {server.alpha}")
             elif command == "show":
                 if len(args) != 1:
                     print(f"[Node {port}]: [FAILLED] Try \"show <entry>\"")
