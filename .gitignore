@@ -51,6 +51,10 @@ docs/_build/
 
 # LotsoNet task-issuer private key -- never commit this
 issuer.key
+issuer.pub
 
 # LotsoNet per-node persistent id
 .lotsonet_id
+
+# Excalidraw examples
+.excalidraw

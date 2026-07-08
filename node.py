@@ -12,6 +12,7 @@ from kademlia.crawling import NodeSpiderCrawl
 from kademlia.network import Server
 from kademlia.node import Node as KademliaNode
 
+import chunking
 import discovery
 from envelope import load_public_key, load_private_key_if_present, make_envelope, open_envelope
 from exec_node import exec_code, serialize_value
@@ -176,10 +177,19 @@ async def listen_for_tasks(server: Server, port: int, processed_tasks: set, node
 
             processed_tasks.add(task_id)
             filename = payload.get("filename", "<unknown>")
-            code = payload.get("code", "")
-            print(f"[Node {port}] Recebido comando distribuído: {filename}")
-
             result_key = f"lotsonet:result:{task_id}:{node_id}"
+
+            if payload.get("chunked"):
+                try:
+                    code = await chunking.fetch_and_reassemble(server, task_id, authorized_pubkey)
+                except chunking.ChunkFetchError as exc:
+                    await server.set(result_key, serialize_value({"error": f"chunk reassembly failed: {exc}"}))
+                    print(f"[Node {port}] Falha ao remontar tarefa em pedaços {task_id}: {exc}")
+                    continue
+            else:
+                code = payload.get("code", "")
+
+            print(f"[Node {port}] Recebido comando distribuído: {filename}")
             try:
                 result = await exec_code(code)
                 await server.set(result_key, serialize_value(result))
@@ -286,15 +296,25 @@ async def init_node(port: int):
 
                 task_id = str(uuid.uuid4())
                 processed_tasks.add(task_id)
+                code_bytes = script.encode("utf-8")
                 task_payload = {"id": task_id, "filename": filename, "code": script}
-                envelope_str = make_envelope("task", issuer_private_key, task_payload, context={"task_id": task_id})
+                trial_envelope = make_envelope("task", issuer_private_key, task_payload, context={"task_id": task_id})
 
                 try:
+                    if chunking.needs_chunking(len(trial_envelope.encode("utf-8"))):
+                        await chunking.build_and_store_manifest(server, task_id, code_bytes, issuer_private_key)
+                        task_payload = {"id": task_id, "filename": filename, "chunked": True}
+                        envelope_str = make_envelope("task", issuer_private_key, task_payload, context={"task_id": task_id})
+                        chunk_note = " (chunked)"
+                    else:
+                        envelope_str = trial_envelope
+                        chunk_note = ""
+
                     await server.set("lotsonet:current-task", envelope_str)
                     await asyncio.sleep(1.5)
                     result = await exec_code(script)
                     await server.set(f"lotsonet:result:{task_id}:{node_id}", serialize_value(result))
-                    print(f"[Node {port}] Comando distribuído para a rede ({task_id}). Resultado local: {result!r}")
+                    print(f"[Node {port}] Comando distribuído para a rede{chunk_note} ({task_id}). Resultado local: {result!r}")
                 except Exception as exc:
                     print(f"[Node {port}] Erro ao executar o comando: {exc}")
             elif command == "collect":
